@@ -1,0 +1,111 @@
+${FMM_ALLOCATION}
+#PBS -l walltime=${FMM_WALLTIME}
+#PBS -q ${FMM_RUNQUEUE}
+#PBS -k doe
+#PBS -N zfmm${FMM_JOB_ID}
+${FMM_FILESYSTEM}
+
+cd $PBS_O_WORKDIR
+
+module list
+#export MPIR_CVAR_PROGRESS_TIMEOUT=120
+
+#export MPIR_CVAR_GPU_FAST_COPY_MAX_SIZE=100
+#export MPIR_CVAR_GPU_USE_IMMEDIATE_COMMAND_LIST=1
+#export MPIR_CVAR_CH4_XPMEM_ENABLE=0
+
+export TZ='/usr/share/zoneinfo/US/Central'
+
+# disable Intel-GPU support in Aurora MPICH
+export MPIR_CVAR_ENABLE_GPU=0
+
+echo Jobid: $PBS_JOBID
+echo Running on host `hostname`
+echo Running on nodes `cat $PBS_NODEFILE`
+
+NNODES=`wc -l < $PBS_NODEFILE`
+NDEPTH=8          # Number of hardware threads per rank, spacing between MPI ranks on a node
+NTHREADS=$OMP_NUM_THREADS # Number of OMP threads per rank, given to OMP_NUM_THREADS
+export FMM_NTOTRANKS=$(( NNODES * ${FMM_NODE_RANKS} ))
+
+echo "NUM_NODES=${NNODES}  TOTAL_RANKS=${FMM_NTOTRANKS}  RANKS_PER_NODE=${FMM_NODE_RANKS}  THREADS_PER_RANK=${OMP_NUM_THREADS}"
+echo "OMP_PROC_BIND=$OMP_PROC_BIND OMP_PLACES=$OMP_PLACES"
+
+# set the debug mode; blank value indicates a regular (non-debug) mode
+FMM_OPENMP_DEBUG=${FMM_OPENMP_DEBUG}
+if [[ -z "${FMM_OPENMP_DEBUG}" ]]; then
+  unset FMM_OPENMP_DEBUG
+else
+  export FMM_OPENMP_DEBUG=${FMM_OPENMP_DEBUG}
+fi
+
+export OMP_NUM_THREADS=${NDEPTH}
+export OMP_PLACES=cores
+export OMP_PROC_BIND=close
+
+export FI_CXI_DEFAULT_CQ_SIZE=524288
+export FI_CXI_CQ_FILL_PERCENT=20
+#export LIBOMPTARGET_LEVEL_ZERO_USE_IMMEDIATE_COMMAND_LIST=0
+
+export MPIR_CVAR_ENABLE_YAKSA_REDUCTION=0
+
+if [ ${NNODES} -gt 1 ] ; then
+  echo "NNODES > 1 will use CXI provider"
+  export FI_PROVIDER=cxi
+  export FI_CXI_RDZV_THRESHOLD=16384
+  export FI_CXI_OFLOW_BUF_SIZE=268435456
+
+  # libfabric log
+  #export FI_LOG_LEVEL=warn
+  export FI_LOG_PROV=cxi
+
+  # this env var improves performance of one-sided communications
+#  export MPIR_CVAR_CH4_OFI_ENABLE_HMEM=1
+
+  export MPIR_CVAR_CH4_OFI_ENABLE_MR_PROV_KEY=1
+
+  env
+else
+  echo "NNODES == 1"
+fi
+
+export IGC_ForcePerThreadPrivateMemorySize=20480
+#export IGC_ForcePerThreadPrivateMemorySize=40960
+#export IGC_ForcePerThreadPrivateMemorySize=81920
+#export IGC_StackOverflowDetection=1
+
+if [ "${FMM_NODE_RANKS}" -eq 12 ] ; then
+  BIND_SCHEME="--cpu-bind=list:1-8:9-16:17-24:25-32:33-40:41-48:53-60:61-68:69-76:77-84:85-92:93-100 ./tools/gpu_tile_compact8.sh"
+elif [ "${FMM_NODE_RANKS}" -eq 8 ] ; then
+  BIND_SCHEME="--cpu-bind=list:1-12:13-24:25-36:37-48:53-64:65-76:77-88:89-100 ./tools/gpu_tile_compact8.sh"
+elif [ "${FMM_NODE_RANKS}" -eq 6 ] ; then
+  export MPIR_CVAR_CH4_IPC_GPU_RMA_ENGINE_TYPE=yaksa
+ #BIND_SCHEME="--cpu-bind=list:1-16:17-32:33-48:53-68:69-84:85-100 ./gpu_dev_compact.sh"
+  BIND_SCHEME="--cpu-bind=list:1-16:17-32:33-48:53-68:69-84:85-100 ./tools/gpu_tile_compact8.sh"
+else
+  BIND_SCHEME="-d ${NDEPTH} --cpu-bind depth ./tools/gpu_tile_compact8.sh"
+fi
+
+#BIND_SCHEME="--cpu-bind=list:1-8:9-16:17-24:25-32:33-40:41-48:53-60:61-68:69-76:77-84:85-92:93-100 ./tools/gpu_tile_compact8.sh"
+#BIND_SCHEME="--cpu-bind=list:1-8:53-60:17-24:69-76:33-40:85-92:9-16:61-68:25-32:77-84:41-48:93-100 ./tools/gpu_tile_compact8.sh"
+#BIND_SCHEME="--cpu-bind=list:1-8,10-16:53-60,62-68:17-24,26-32:69-76,78-84:33-40,42-48:85-92,94-100:9-16,2-8:61-68,54-60:25-32,18-24:77-84,70-76:41-48,34-40:93-100,86-92 ./tools/gpu_tile_compact8.sh"
+
+#export OMP_NUM_THREADS=15
+#BIND_SCHEME="--cpu-bind=list:1-8,10-16:9-16,2-8:17-24,26-32:25-32,18-24:33-40,42-48:41-48,34-40:53-60,62-68:61-68,54-60:69-76,78-84:77-84,70-76:85-92,94-100:93-100,86-92 ./tools/gpu_tile_compact8.sh"
+
+#BIND_SCHEME="--cpu-bind=list:1-8:9-16:17-24:25-32:33-40:41-48:53-60:61-68:69-76:77-84:85-92:93-100 ./tools/gpu_tile_compact8.sh"
+#BIND_SCHEME="--cpu-bind=list:1-16:17-32:33-48:53-68:69-84:85-100:1-16:17-32:33-48:53-68:69-84:85-100 ./tools/gpu_tile_compact8.sh"
+#BIND_SCHEME="--cpu-bind=list:1-16:17-32:33-48:53-68:69-84:85-100:2-17:18-33:34-49:54-69:70-85:86-101 ./tools/gpu_tile_compact8.sh"
+#BIND_SCHEME="--cpu-bind=list:1-16:17-32:33-48:53-68:69-84:85-100:3-18:19-34:35-50:55-70:71-86:87-102 ./tools/gpu_tile_compact8.sh"
+#BIND_SCHEME="--cpu-bind=list:1-16:17-32:33-48:53-68:69-84:85-100:4-19:20-35:36-51:56-71:72-87:88-103 ./tools/gpu_tile_compact8.sh"
+echo "BIND_SCHEME=${BIND_SCHEME}"
+
+#mpiexec -np ${NNODES} -ppn 1 /usr/bin/geopmwrite -f tools/geopmwrite.conf
+#mpiexec -np ${NNODES} -ppn 1 /usr/bin/geopmread GPU_CORE_FREQUENCY_MAX_CONTROL board 0
+#mpiexec -np ${NNODES} -ppn 1 /usr/bin/geopmread GPU_CORE_FREQUENCY_MIN_CONTROL board 0
+
+# monitor GPU frequency
+# move this line to the bottom of the file when using it, and append & to the end the FMM launch line
+# mpiexec -np 1 tools/launch_geopmsession.sh
+
+mpiexec -np ${FMM_NTOTRANKS} -ppn ${FMM_NODE_RANKS} -envall ${BIND_SCHEME} ./tools/fmm.sh ${FMM_SIDE_LEN} ${FMM_EXPAN_SZ} ${FMM_WS} ${FMM_INPUT}.psf ${FMM_INPUT}.pdb 0 ${FMM_PROBSIZE} ${FMM_PRT_RANK} ${FMM_SUBCOMSZ} ${FMM_PLAN_RANKS} ${FMM_DD_LEVEL} ${FMM_JOB_NAME}${FMM_PROBSIZE_OUT}-cu${FMM_CU_OUT}-nL${FMM_NL_OUT}-ws${FMM_WS}-nn${FMM_NUMNODES_OUT}-nr${FMM_NODE_RANKS_OUT}-sc${FMM_SUBCOMSZ_OUT}
